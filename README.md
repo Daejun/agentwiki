@@ -31,6 +31,18 @@ cargo build --workspace
 cargo test --workspace
 ```
 
+### 스크립트
+
+| 스크립트 | 용도 |
+|---|---|
+| `scripts/smoke.sh` | 빌드 → 단위테스트 → CLI 흐름 → MCP JSON-RPC 라운드트립을 한 번에 검증(종료코드 0=전부 통과). `--no-build`로 빌드 생략 |
+| `scripts/demo.sh` | 프로토타입을 사람이 눈으로 보는 데모(한국어 노트·append·검색·KV·다이제스트) |
+
+```sh
+./scripts/smoke.sh    # 23개 체크 전부 통과해야 함
+./scripts/demo.sh     # 실제 출력 시연
+```
+
 > 임베딩(fastembed-rs)은 모델 다운로드가 필요하므로 `aw-core`의 `embeddings`
 > feature로 게이트됩니다. 기본 빌드는 FTS5 단독으로 오프라인에서 동작합니다.
 
