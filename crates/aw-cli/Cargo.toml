@@ -1,0 +1,13 @@
+[package]
+name = "aw-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aw"
+path = "src/main.rs"
+
+[dependencies]
+aw-core = { path = "../aw-core" }
+anyhow.workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "aw-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+rusqlite.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+regex.workspace = true
+sha2.workspace = true
+time.workspace = true
+
+[features]
+default = []
+# 로컬 임베딩(fastembed-rs)을 켠다. 모델 다운로드/네트워크가 필요하므로
+# 잠긴 환경에서는 끈 채로 빌드한다(FTS5 단독 검색은 그대로 동작).
+embeddings = []

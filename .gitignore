@@ -1,0 +1,19 @@
+# Rust 빌드 산출물
+/target
+**/*.rs.bk
+Cargo.lock
+
+# 파생 인덱스 (D5: 마크다운만 git 공유, 인덱스는 로컬 재생성)
+.aw/
+*.db
+*.db-journal
+*.db-wal
+
+# 코드 인덱스 (M2, 비동기화)
+tags
+cscope.out
+cscope.*.out
+compile_commands.json
+
+# 로컬 전용 노트 (D15: 민감/머신 한정)
+notes-local/

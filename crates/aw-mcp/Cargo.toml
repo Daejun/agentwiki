@@ -1,0 +1,15 @@
+[package]
+name = "aw-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aw-mcp"
+path = "src/main.rs"
+
+[dependencies]
+aw-core = { path = "../aw-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
