@@ -1,0 +1,31 @@
+name: release
+
+# D24: musl 정적 바이너리 릴리스 + cargo install. 태그 push 시 동작.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install musl tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build static binaries
+        run: cargo build --release --workspace --target x86_64-unknown-linux-musl
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/aw dist/
+          cp target/x86_64-unknown-linux-musl/release/aw-mcp dist/
+          tar -C dist -czf agentwiki-${GITHUB_REF_NAME}-x86_64-linux-musl.tar.gz aw aw-mcp
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: agentwiki-*-x86_64-linux-musl.tar.gz

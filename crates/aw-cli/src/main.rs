@@ -100,6 +100,49 @@ fn main() -> anyhow::Result<()> {
                 None => println!("(not set)"),
             }
         }
+        "code-reindex" => {
+            let src = rest.first().cloned().unwrap_or_else(|| ".".into());
+            let store = open(&root)?;
+            let n = store.code(&src).reindex_symbols()?;
+            println!("indexed {n} symbols from {src}");
+        }
+        "where" => {
+            let sym = rest.first().cloned().unwrap_or_default();
+            let store = open(&root)?;
+            let src = rest.get(1).cloned().unwrap_or_else(|| ".".into());
+            for d in store.code(&src).where_sym(&sym, 10)? {
+                println!("{}:{} [{}] {}{}", d.file, d.line, d.kind, d.name, d.signature);
+            }
+        }
+        "show" => {
+            let sym = rest.first().cloned().unwrap_or_default();
+            let src = rest.get(1).cloned().unwrap_or_else(|| ".".into());
+            let store = open(&root)?;
+            match store.code(&src).show_sym(&sym)? {
+                Some((d, body)) => {
+                    println!("// {}:{}-{} {}{}", d.file, d.line, d.end_line.unwrap_or(d.line), d.name, d.signature);
+                    println!("{body}");
+                }
+                None => println!("no definition for {sym}"),
+            }
+        }
+        "recall" => {
+            let sym = rest.first().cloned().unwrap_or_default();
+            let store = open(&root)?;
+            store.reindex()?;
+            let r = store.recall(&sym, 5)?;
+            match &r.def {
+                Some(d) => println!("definition: {}:{} [{}] {}{}", d.file, d.line, d.kind, d.name, d.signature),
+                None => println!("definition: (not in code index)"),
+            }
+            for (id, title) in &r.anchored_notes {
+                let flag = if r.stale_notes.contains(id) { " ⚠STALE" } else { "" };
+                println!("anchored: {id} {title}{flag}");
+            }
+            for h in &r.mentions {
+                println!("mention: {} [{}] {}", h.id, h.subsystem, h.title);
+            }
+        }
         "digest" => {
             let store = open(&root)?;
             store.reindex()?;
@@ -110,7 +153,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         _ => {
-            eprintln!("usage: aw [--root DIR] <reindex|search|get|note|kv-set|kv-get|digest> ...");
+            eprintln!("usage: aw [--root DIR] <reindex|search|get|note|kv-set|kv-get|digest|code-reindex|where|show|recall> ...");
             std::process::exit(2);
         }
     }

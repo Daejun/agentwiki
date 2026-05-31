@@ -7,6 +7,7 @@
 //! - 반자동 캡처 propose→commit (D6), 비밀 스캔 경고만 (D15)
 //! - 3스코프 KV (D22), 수동 reindex (D12), 최소 다이제스트 (D11)
 
+pub mod code;
 pub mod embed;
 pub mod error;
 pub mod index;
@@ -14,8 +15,9 @@ pub mod note;
 pub mod secrets;
 pub mod store;
 
+pub use code::{CodeIndex, SymbolDef};
 pub use embed::{Embedder, NoopEmbedder};
 pub use error::{AwError, Result};
 pub use index::{Hit, Index};
 pub use note::{CodeRef, Entry, Frontmatter, Note, NoteType};
-pub use store::{Digest_, DigestNote, Proposal, Store};
+pub use store::{Digest_, DigestNote, Proposal, Recall, StaleReport, Store};

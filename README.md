@@ -76,12 +76,38 @@ $AW --root ./data digest                # 세션 시작용 최소 목차
 
 - `wiki` — `op=search|get|propose|commit`. `propose`는 초안만 보여주고 저장하지
   않으며, 승인 후 `commit`이 append-only로 기록(반자동 캡처, D6).
+- `code` — `op=reindex|where|show|xref`. **`show`는 함수 본문만 잘라** 반환(거대
+  파일 통째 read 금지). 소스 루트는 `src` 인자 또는 kv `kernel_src`.
+- `recall` — 심볼 1개로 코드 정의 + 닻 노트 + 언급 + stale 경고를 한 번에.
 - `kv` — `op=get|set`, `scope=global|project:<id>|machine:<host>` (D22).
-- `admin` — `op=reindex|digest|scan-secrets`.
+- `admin` — `op=reindex|digest|stale|scan-secrets`.
+
+## 리눅스 커널 컨텍스트 효율 (M2)
+
+`code` 도구가 커널 작업의 컨텍스트 낭비를 정면 대응합니다:
+
+```sh
+$AW --root ./data code-reindex /path/to/linux   # ctags 로 심볼 인덱스
+$AW --root ./data where do_mmap /path/to/linux  # grep 대신 정의 위치
+$AW --root ./data show  do_mmap /path/to/linux  # 함수 본문만 슬라이싱
+$AW --root ./data recall do_mmap                # 코드+노트 통합 회수 + stale 경고
+```
+
+- **함수 단위 슬라이싱**: `show`는 ctags `end:` 필드로 대상 함수만 반환 →
+  수천 줄 파일을 통째로 읽지 않음.
+- **심볼 닻 + sig_hash 검증**(D14): 커널이 바뀌어 시그니처가 달라지면 닻 노트를
+  자동으로 `stale` 표시 → 라인 드리프트·지식 부패 방지.
+
+## 세션 통합 (D11)
+
+`scripts/session-start-hook.sh`를 Claude Code SessionStart 훅으로 걸면 세션 시작 시
+**최소 다이제스트**(목차+진입점만)가 주입됩니다. 본문은 자동 주입하지 않고 필요할
+때 `wiki op=get` / `recall`로 회수합니다.
 
 ## 로드맵
 
-- **M1 (현재)**: 위키/메모리 코어 — 노트·인덱스·검색·KV·반자동 캡처·다이제스트.
-- **M2**: ctags/cscope 코드 인덱스 + `code`(where/show/xref) + `recall` (커널 효율).
-- **M3**: clangd 승격, musl 릴리스 바이너리 + cargo install, git 동기화 워크플로.
+- **M1 ✅**: 위키/메모리 코어 — 노트·인덱스·검색·KV·반자동 캡처·다이제스트.
+- **M2 ✅**: ctags/cscope 코드 인덱스 + `code`(where/show/xref) + `recall` + stale.
+- **M3 (진행)**: CI/릴리스 워크플로(musl 바이너리 + cargo install), SessionStart 훅.
+  clangd 승격은 향후.
 - **M4**: fastembed-rs 임베딩 활성화, append 로그 compact, 멀티 버전 키잉.

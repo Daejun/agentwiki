@@ -79,7 +79,7 @@ impl Index {
             );
             CREATE TABLE IF NOT EXISTS symbols (
                 name TEXT, kind TEXT, file TEXT, line INTEGER,
-                signature TEXT, subsystem TEXT
+                end_line INTEGER, signature TEXT, sig_hash TEXT, subsystem TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_sym_name ON symbols(name);
             CREATE TABLE IF NOT EXISTS links (
@@ -300,6 +300,69 @@ impl Index {
             });
         }
         Ok(hits)
+    }
+
+    // ---- 코드 심볼 (M2) ----
+
+    /// ctags 결과로 symbols 테이블을 통째로 교체한다(수동 reindex, D12).
+    pub fn replace_symbols(
+        &self,
+        defs: &[crate::code::SymbolDef],
+        _src_root: &str,
+    ) -> Result<()> {
+        self.conn.execute("DELETE FROM symbols", [])?;
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO symbols(name,kind,file,line,end_line,signature,sig_hash) \
+                 VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            )?;
+            for d in defs {
+                stmt.execute(params![
+                    d.name,
+                    d.kind,
+                    d.file,
+                    d.line,
+                    d.end_line,
+                    d.signature,
+                    d.sig_hash()
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 심볼 이름으로 정의를 조회한다. 함수 등 정의성 kind 를 우선한다.
+    pub fn lookup_symbols(
+        &self,
+        name: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::code::SymbolDef>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name,kind,file,line,end_line,signature FROM symbols \
+             WHERE name=?1 \
+             ORDER BY (kind IN ('function','struct','macro','prototype')) DESC, line ASC \
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![name, limit as i64], |r| {
+            Ok(crate::code::SymbolDef {
+                name: r.get(0)?,
+                kind: r.get(1)?,
+                file: r.get(2)?,
+                line: r.get(3)?,
+                end_line: r.get(4)?,
+                signature: r.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// 심볼 테이블 행 수.
+    pub fn symbol_count(&self) -> Result<i64> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))?)
     }
 
     // ---- KV (D22) ----

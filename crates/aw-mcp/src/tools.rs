@@ -55,6 +55,8 @@ impl Server {
 
         let text = match name {
             "wiki" => self.tool_wiki(&args)?,
+            "code" => self.tool_code(&args)?,
+            "recall" => self.tool_recall(&args)?,
             "kv" => self.tool_kv(&args)?,
             "admin" => self.tool_admin(&args)?,
             other => return Err(anyhow::anyhow!("unknown tool: {other}")),
@@ -142,6 +144,110 @@ impl Server {
         }
     }
 
+    /// 코드 인덱스 도구 (M2, D7). op=reindex|where|show|xref.
+    /// 소스 루트는 인자 `src` 또는 KV `kernel_src`(machine 스코프)에서 얻는다.
+    fn tool_code(&self, a: &Value) -> anyhow::Result<String> {
+        let op = str_arg(a, "op").unwrap_or_default();
+        let store = self.open()?;
+        let src = self.resolve_src(&store, a)?;
+        let code = store.code(&src);
+        match op.as_str() {
+            "reindex" => {
+                let n = code.reindex_symbols()?;
+                Ok(format!("indexed {n} symbols from {src}"))
+            }
+            "where" => {
+                let sym = str_arg(a, "symbol").ok_or_else(|| anyhow::anyhow!("needs 'symbol'"))?;
+                let defs = code.where_sym(&sym, usize_arg(a, "limit").unwrap_or(10))?;
+                if defs.is_empty() {
+                    return Ok(format!("no definition found for '{sym}' (run code op=reindex first?)"));
+                }
+                let mut s = String::new();
+                for d in defs {
+                    s.push_str(&format!(
+                        "{}:{} [{}] {}{}\n",
+                        d.file, d.line, d.kind, d.name, d.signature
+                    ));
+                }
+                Ok(s)
+            }
+            "show" => {
+                let sym = str_arg(a, "symbol").ok_or_else(|| anyhow::anyhow!("needs 'symbol'"))?;
+                match code.show_sym(&sym)? {
+                    None => Ok(format!("no definition for '{sym}'")),
+                    Some((d, body)) => Ok(format!(
+                        "// {}:{}-{}  {}{}\n{}",
+                        d.file,
+                        d.line,
+                        d.end_line.unwrap_or(d.line),
+                        d.name,
+                        d.signature,
+                        body
+                    )),
+                }
+            }
+            "xref" => {
+                let sym = str_arg(a, "symbol").ok_or_else(|| anyhow::anyhow!("needs 'symbol'"))?;
+                let callers = str_arg(a, "mode").as_deref() != Some("callees");
+                let lines = code.xref(&sym, callers, usize_arg(a, "limit").unwrap_or(20))?;
+                if lines.is_empty() {
+                    return Ok(format!("no {} for '{sym}' (build cscope first?)",
+                        if callers { "callers" } else { "callees" }));
+                }
+                Ok(lines.join("\n"))
+            }
+            other => Err(anyhow::anyhow!("code: unknown op '{other}'")),
+        }
+    }
+
+    /// 통합 회수 도구 (M2 핵심): 심볼 정의 + 닻 노트 + stale 경고를 묶어 반환.
+    fn tool_recall(&self, a: &Value) -> anyhow::Result<String> {
+        let sym = str_arg(a, "symbol").ok_or_else(|| anyhow::anyhow!("recall needs 'symbol'"))?;
+        let store = self.open()?;
+        store.reindex()?;
+        let r = store.recall(&sym, usize_arg(a, "limit").unwrap_or(5))?;
+        let mut s = format!("# recall: {}\n", r.symbol);
+        match &r.def {
+            Some(d) => s.push_str(&format!(
+                "definition: {}:{} [{}] {}{}\n",
+                d.file, d.line, d.kind, d.name, d.signature
+            )),
+            None => s.push_str("definition: (not in code index — run code op=reindex)\n"),
+        }
+        if !r.anchored_notes.is_empty() {
+            s.push_str("anchored notes:\n");
+            for (id, title) in &r.anchored_notes {
+                let flag = if r.stale_notes.contains(id) { " ⚠STALE" } else { "" };
+                s.push_str(&format!("  - {id} {title}{flag}\n"));
+            }
+        }
+        if !r.mentions.is_empty() {
+            s.push_str("mentions:\n");
+            for h in &r.mentions {
+                s.push_str(&format!("  - {} [{}] {}\n", h.id, h.subsystem, h.title));
+            }
+        }
+        if r.anchored_notes.is_empty() && r.mentions.is_empty() {
+            s.push_str("(no notes yet — capture one with wiki op=propose)\n");
+        }
+        Ok(s)
+    }
+
+    /// 소스 루트 해석: 인자 src > KV kernel_src > 에러.
+    fn resolve_src(&self, store: &Store, a: &Value) -> anyhow::Result<String> {
+        if let Some(s) = str_arg(a, "src") {
+            return Ok(s);
+        }
+        let host = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into());
+        let prefer = vec![format!("machine:{host}")];
+        match store.index().kv_get("kernel_src", &prefer)? {
+            Some(s) => Ok(s),
+            None => Err(anyhow::anyhow!(
+                "no source root: pass 'src' or set kv key 'kernel_src' (scope machine:<host>)"
+            )),
+        }
+    }
+
     fn tool_kv(&self, a: &Value) -> anyhow::Result<String> {
         let op = str_arg(a, "op").unwrap_or_default();
         let store = self.open()?;
@@ -188,6 +294,18 @@ impl Server {
                     ));
                 }
                 s.push_str("\n(본문은 wiki op=get 으로 회수)\n");
+                Ok(s)
+            }
+            "stale" => {
+                store.reindex()?;
+                let reports = store.check_stale()?;
+                if reports.is_empty() {
+                    return Ok("no stale anchors".into());
+                }
+                let mut s = String::from("stale symbol anchors (D14):\n");
+                for r in reports {
+                    s.push_str(&format!("  - {} → {} ({})\n", r.note_id, r.symbol, r.status));
+                }
                 Ok(s)
             }
             "scan-secrets" => {
@@ -262,6 +380,33 @@ fn tool_specs() -> Value {
             }
         },
         {
+            "name": "code",
+            "description": "코드 인덱스(ctags/cscope). op=reindex|where|show|xref. show는 함수 본문만 잘라 반환(거대 파일 통째 read 금지). 소스 루트는 src 인자 또는 kv 'kernel_src'.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "op": {"type": "string", "enum": ["reindex", "where", "show", "xref"]},
+                    "symbol": {"type": "string"},
+                    "src": {"type": "string", "description": "소스 트리 루트(미지정 시 kv kernel_src)"},
+                    "mode": {"type": "string", "enum": ["callers", "callees"], "description": "xref 방향"},
+                    "limit": {"type": "integer"}
+                },
+                "required": ["op"]
+            }
+        },
+        {
+            "name": "recall",
+            "description": "심볼 1개로 통합 회수: 코드 정의 + 그 심볼에 닻 내린 노트 + 언급 검색 + stale 경고를 한 번에. '이 함수 만질 건데 아는 거 다 줘'.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "symbol": {"type": "string"},
+                    "limit": {"type": "integer"}
+                },
+                "required": ["symbol"]
+            }
+        },
+        {
             "name": "kv",
             "description": "빠른 사실 키-값. op=get|set. scope=global|project:<id>|machine:<host>. 조회는 machine→project→global 우선순위.",
             "inputSchema": {
@@ -282,7 +427,7 @@ fn tool_specs() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": {"type": "string", "enum": ["reindex", "digest", "scan-secrets"]},
+                    "op": {"type": "string", "enum": ["reindex", "digest", "stale", "scan-secrets"]},
                     "limit": {"type": "integer"},
                     "text": {"type": "string"}
                 },

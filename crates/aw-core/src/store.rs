@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
+use crate::code::{CodeIndex, SymbolDef};
 use crate::embed::{Embedder, NoopEmbedder};
 use crate::error::{AwError, Result};
 use crate::index::{Hit, Index};
@@ -246,6 +247,118 @@ impl Store {
         let notes = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         let total = self.index.note_count()?;
         Ok(Digest_ { total, notes })
+    }
+}
+
+/// `recall` 결과: 심볼 정의 + 그 심볼에 닻 내린 노트들 (M2 핵심).
+#[derive(Debug, Clone)]
+pub struct Recall {
+    pub symbol: String,
+    /// 코드 인덱스에서 찾은 정의(있으면).
+    pub def: Option<SymbolDef>,
+    /// 이 심볼을 code_refs 로 참조하는 노트들(id, title).
+    pub anchored_notes: Vec<(String, String)>,
+    /// 본문/제목에 심볼명이 등장하는 검색 히트(닻이 없어도).
+    pub mentions: Vec<Hit>,
+    /// 심볼 닻이 stale 한 노트 id 목록(sig_hash 불일치, D14).
+    pub stale_notes: Vec<String>,
+}
+
+/// 닻 검증 결과 1건 (D14).
+#[derive(Debug, Clone)]
+pub struct StaleReport {
+    pub note_id: String,
+    pub symbol: String,
+    /// none=심볼 소멸, mismatch=시그니처 변경, ok=일치.
+    pub status: &'static str,
+}
+
+impl Store {
+    /// 코드 인덱스 핸들을 연다(소스 트리 루트 지정).
+    pub fn code<'a>(&'a self, src_root: &str) -> CodeIndex<'a> {
+        CodeIndex::new(src_root, &self.index)
+    }
+
+    /// 통합 회수(M2 핵심): "이 심볼 만질 건데 아는 거 다 줘".
+    /// 코드 정의 + 닻 내린 노트 + 언급 검색 + stale 경고를 한 번에 모은다.
+    pub fn recall(&self, symbol: &str, limit: usize) -> Result<Recall> {
+        let def = self.index.lookup_symbols(symbol, 1)?.into_iter().next();
+
+        // 닻(code_refs.sym == symbol)으로 노트를 찾는다. frontmatter 를 직접 읽는다.
+        let mut anchored = Vec::new();
+        let mut stale = Vec::new();
+        let cur_hash = def.as_ref().map(|d| d.sig_hash());
+        for note in self.all_notes()? {
+            for cr in &note.front.code_refs {
+                if cr.sym == symbol {
+                    anchored.push((note.front.id.clone(), note.front.title.clone()));
+                    // D14: 기록된 sig_hash 와 현재 코드의 해시 비교.
+                    if let (Some(noted), Some(cur)) = (&cr.sig_hash, &cur_hash) {
+                        if noted != cur {
+                            stale.push(note.front.id.clone());
+                        }
+                    } else if def.is_none() {
+                        stale.push(note.front.id.clone()); // 심볼 소멸
+                    }
+                    break;
+                }
+            }
+        }
+
+        let mentions = self.search(symbol, None, limit)?;
+        Ok(Recall {
+            symbol: symbol.to_string(),
+            def,
+            anchored_notes: anchored,
+            mentions,
+            stale_notes: stale,
+        })
+    }
+
+    /// 모든 노트의 닻을 코드 인덱스와 대조해 stale 을 보고한다(D14).
+    pub fn check_stale(&self) -> Result<Vec<StaleReport>> {
+        let mut reports = Vec::new();
+        for note in self.all_notes()? {
+            for cr in &note.front.code_refs {
+                let cur = self.index.lookup_symbols(&cr.sym, 1)?.into_iter().next();
+                let status = match (&cur, &cr.sig_hash) {
+                    (None, _) => "none",
+                    (Some(d), Some(noted)) if &d.sig_hash() != noted => "mismatch",
+                    _ => "ok",
+                };
+                if status != "ok" {
+                    reports.push(StaleReport {
+                        note_id: note.front.id.clone(),
+                        symbol: cr.sym.clone(),
+                        status,
+                    });
+                }
+            }
+        }
+        Ok(reports)
+    }
+
+    /// 디스크의 모든 노트를 파싱해 반환(닻 검사/recall용).
+    fn all_notes(&self) -> Result<Vec<Note>> {
+        let dir = self.notes_dir();
+        let mut notes = Vec::new();
+        if !dir.exists() {
+            return Ok(notes);
+        }
+        for entry in WalkDir::new(&dir).into_iter().filter_map(|e| e.ok()) {
+            let p = entry.path();
+            if !p.extension().map(|e| e == "md").unwrap_or(false) {
+                continue;
+            }
+            let content = std::fs::read_to_string(p)?;
+            if !content.trim_start().starts_with("---") {
+                continue;
+            }
+            if let Ok(n) = Note::parse(&content, Some(p.to_string_lossy().into_owned())) {
+                notes.push(n);
+            }
+        }
+        Ok(notes)
     }
 }
 

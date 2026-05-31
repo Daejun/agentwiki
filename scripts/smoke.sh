@@ -122,6 +122,8 @@ EOF
 
 check "initialize returns serverInfo" '"name":"agentwiki"' "$mcp_out"
 check "tools/list exposes wiki"        '"name":"wiki"'      "$mcp_out"
+check "tools/list exposes code"        '"name":"code"'      "$mcp_out"
+check "tools/list exposes recall"      '"name":"recall"'    "$mcp_out"
 check "tools/list exposes kv"          '"name":"kv"'        "$mcp_out"
 check "tools/list exposes admin"       '"name":"admin"'     "$mcp_out"
 check "wiki propose shows draft"       'PROPOSAL id=mm-'    "$mcp_out"
@@ -138,6 +140,64 @@ solo=$(AW_ROOT="$MWORK/solo" "$MCP" 2>/dev/null <<'EOF'
 EOF
 )
 check "propose does not persist (semi-auto)" 'reindexed 0 notes' "$solo"
+
+# ---------------------------------------------------------------------------
+head "code index (M2: ctags/cscope)"
+if command -v ctags >/dev/null 2>&1; then
+  CSRC="$(mktemp -d)"
+  CDATA="$(mktemp -d)"
+  trap 'rm -rf "$WORK" "$MWORK" "$CSRC" "$CDATA"' EXIT
+  cat > "$CSRC/mmap.c" <<'EOF'
+int helper(int x) { return x + 1; }
+int do_mmap(struct file *f, unsigned long addr)
+{
+	return helper(addr);
+}
+void caller(void) { do_mmap(0, 4096); }
+EOF
+  out=$("$AW" --root "$CDATA" code-reindex "$CSRC" 2>&1)
+  check "ctags reindex finds symbols" "indexed" "$out"
+
+  out=$("$AW" --root "$CDATA" where do_mmap "$CSRC" 2>&1)
+  check "where locates definition"    "mmap.c" "$out"
+  check "where reports function kind"  "[function]" "$out"
+
+  out=$("$AW" --root "$CDATA" show do_mmap "$CSRC" 2>&1)
+  check "show slices target body"      "helper(addr)" "$out"
+  if [[ "$out" == *"int helper(int x)"* ]]; then
+    bad "show must NOT include other functions (slicing)"
+  else
+    ok "show excludes other functions (function-level slicing)"
+  fi
+
+  # 심볼 닻 stale 감지(D14): 잘못된 sig_hash 노트를 만들고 recall.
+  mkdir -p "$CDATA/notes/mm"
+  cat > "$CDATA/notes/mm/mm-anchor.md" <<'EOF'
+---
+id: mm-anchor
+title: do_mmap 락 규약
+type: gotcha
+subsystem: mm
+tags: [locking]
+code_refs:
+  - sym: do_mmap
+    file: mmap.c
+    sig_hash: "DEADBEEF"
+confidence: high
+---
+## 2026-01-01T00:00:00Z · host=test · confidence=high
+do_mmap 호출 전 락 필요.
+EOF
+  out=$("$AW" --root "$CDATA" recall do_mmap 2>&1)
+  check "recall links code def"        "definition: " "$out"
+  check "recall links anchored note"   "mm-anchor" "$out"
+  check "recall flags stale anchor"    "STALE" "$out"
+
+  if command -v cscope >/dev/null 2>&1; then ok "cscope available"; else
+    printf '  %sSKIP%s cscope not installed\n' "$YELLOW" "$RESET"; fi
+else
+  printf '  %sSKIP%s ctags not installed — M2 code-index checks skipped\n' "$YELLOW" "$RESET"
+fi
 
 # ---------------------------------------------------------------------------
 head "result"
