@@ -238,6 +238,26 @@ CREATE TABLE links (src, dst, rel);                                   -- 노트�
 
 ---
 
+## 7.5. 구현 현황 (2026-05-31)
+
+프로토타입이 동작하며 테스트 스크립트로 검증된다. `scripts/smoke.sh` = 34 체크 통과.
+
+| 마일스톤 | 상태 | 비고 |
+|---|---|---|
+| M1 위키/메모리 | ✅ 완료 | 노트·FTS5(trigram)+LIKE 폴백·KV 3스코프·반자동 캡처·다이제스트·비밀 스캔 |
+| M2 코드 인덱스 | ✅ 완료 | ctags(where/show 슬라이싱)·cscope(xref)·recall·심볼 닻 stale 검증(D14) |
+| M3 패키징/통합 | 🟡 부분 | CI/release 워크플로·SessionStart 훅 완료. clangd 승격은 미구현 |
+| M4 확장 | ⬜ 예정 | fastembed 실제 추론(현재 트레이트+자리만), append compact, 멀티버전 |
+
+구현된 크레이트: `aw-core`(라이브러리, 20 단위테스트), `aw-mcp`(MCP 서버:
+wiki/code/recall/kv/admin), `aw-cli`(`aw` 디버깅 CLI). 검증 스크립트:
+`scripts/smoke.sh`(자동), `scripts/demo.sh`(시연).
+
+**의도적으로 미완(정직 고지):**
+- 임베딩(D9/D18)은 `embeddings` feature 뒤 트레이트·자리만 — 모델 다운로드가
+  잠긴 환경 빌드를 막으므로 M4로 미룸. 현재 검색은 FTS5+LIKE 단독.
+- clangd 승격(D7 정밀 경로)·멀티 커널 버전 키잉(D16)은 향후.
+
 ## 8. 미해결/추후 결정 (열어둠)
 - 임베딩 모델 구체 선정·차원(D18: multilingual-e5-small 가정, 벤치 후 확정).
 - 멀티 커널 버전 동시 지원의 구체 키잉(D16은 단일 트리 전제).
