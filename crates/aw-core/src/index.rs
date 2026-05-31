@@ -99,13 +99,18 @@ impl Index {
             .unwrap_or_default()
             .trim_matches('"')
             .to_string();
+        // updated = 노트의 최신 엔트리 타임스탬프(실제 지식 갱신 시각). 인덱싱
+        // 시각(now)을 쓰면 reindex 때 모든 노트가 같아져 D11 정렬이 무의미해진다.
+        let updated = note
+            .latest_timestamp()
+            .unwrap_or_else(|| "0000".to_string());
 
         self.conn.execute(
             "INSERT INTO notes(id,title,type,subsystem,tags,confidence,path,updated)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,datetime('now'))
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
              ON CONFLICT(id) DO UPDATE SET
-               title=?2,type=?3,subsystem=?4,tags=?5,confidence=?6,path=?7,updated=datetime('now')",
-            params![f.id, f.title, type_s, f.subsystem, tags, f.confidence, note.path],
+               title=?2,type=?3,subsystem=?4,tags=?5,confidence=?6,path=?7,updated=?8",
+            params![f.id, f.title, type_s, f.subsystem, tags, f.confidence, note.path, updated],
         )?;
 
         // FTS는 외부콘텐츠가 아니므로 delete 후 insert 로 갱신.

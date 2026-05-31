@@ -233,6 +233,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+head "regression: parsing & ordering bugs"
+RWORK="$(mktemp -d)"
+trap 'rm -rf "$WORK" "$MWORK" "$CSRC" "$CDATA" "$HWORK" "$RWORK"' EXIT
+
+# 본문 속 마크다운 헤딩이 엔트리로 오분리되지 않아야(버그1 회귀).
+# 엔트리 헤더는 타임스탬프(YYYY-MM-DDT)로 시작하므로 그 라인만 센다.
+cre=$("$AW" --root "$RWORK" note mm "헤딩테스트" $'본문 시작\n\n## 주의\n헤딩 본문' gotcha high 2>/dev/null)
+RID=$(printf '%s' "$cre" | awk '/created/ {print $2}')
+ecount=$("$AW" --root "$RWORK" get "$RID" 2>/dev/null | grep -cE '^## [0-9]{4}-[0-9]{2}-[0-9]{2}T')
+if [[ "$ecount" == "1" ]]; then ok "body markdown heading not split into entry"; else
+  bad "markdown heading split (timestamp entries=$ecount, expected 1)"; fi
+
+# 같은 제목, 다른 본문 → 같은 노트로 append(버그2 회귀).
+"$AW" --root "$RWORK" note net "토픽A" "사실 하나" concept med >/dev/null 2>&1
+"$AW" --root "$RWORK" note net "토픽A" "사실 둘 다른 내용" concept med >/dev/null 2>&1
+nfiles=$(find "$RWORK/notes/net" -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
+if [[ "$nfiles" == "1" ]]; then ok "same topic appends to one note"; else
+  bad "same topic forked into $nfiles files"; fi
+
+# digest 정렬이 reindex 후에도 최신순 유지(버그4 회귀).
+"$AW" --root "$RWORK" reindex >/dev/null 2>&1
+dg=$("$AW" --root "$RWORK" digest 2>/dev/null)
+check "digest survives reindex (non-empty)" "notes total" "$dg"
+
+# ---------------------------------------------------------------------------
 head "result"
 printf '%s%d passed%s, %s%d failed%s\n' "$GREEN" "$PASS" "$RESET" \
   "$([[ $FAIL -gt 0 ]] && echo "$RED" || echo "$GREEN")" "$FAIL" "$RESET"

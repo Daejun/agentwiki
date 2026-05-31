@@ -211,17 +211,55 @@ fn parse_ctags_json(text: &str) -> Vec<SymbolDef> {
 }
 
 /// end 필드가 없을 때 중괄호 매칭으로 블록 끝 라인을 추정한다.
+/// 문자열("...")·문자('...') 리터럴과 주석(// , /* */) 속 중괄호는 무시한다.
 fn brace_match_end(lines: &[&str], start: usize) -> usize {
     let mut depth = 0i32;
     let mut seen = false;
+    let mut in_block_comment = false;
     for (i, line) in lines.iter().enumerate().skip(start) {
-        for c in line.chars() {
-            if c == '{' {
-                depth += 1;
-                seen = true;
-            } else if c == '}' {
-                depth -= 1;
+        let bytes: Vec<char> = line.chars().collect();
+        let mut j = 0;
+        while j < bytes.len() {
+            let c = bytes[j];
+            if in_block_comment {
+                if c == '*' && bytes.get(j + 1) == Some(&'/') {
+                    in_block_comment = false;
+                    j += 2;
+                    continue;
+                }
+                j += 1;
+                continue;
             }
+            match c {
+                '/' if bytes.get(j + 1) == Some(&'/') => break, // 라인 주석: 줄 끝까지 무시
+                '/' if bytes.get(j + 1) == Some(&'*') => {
+                    in_block_comment = true;
+                    j += 2;
+                    continue;
+                }
+                '"' | '\'' => {
+                    // 리터럴 스킵(이스케이프 처리).
+                    let quote = c;
+                    j += 1;
+                    while j < bytes.len() {
+                        if bytes[j] == '\\' {
+                            j += 2;
+                            continue;
+                        }
+                        if bytes[j] == quote {
+                            break;
+                        }
+                        j += 1;
+                    }
+                }
+                '{' => {
+                    depth += 1;
+                    seen = true;
+                }
+                '}' => depth -= 1,
+                _ => {}
+            }
+            j += 1;
         }
         if seen && depth <= 0 {
             return i + 1;
@@ -271,6 +309,22 @@ garbage line"#;
         let src = vec!["int f(void)", "{", "  return 0;", "}", "int g;"];
         let end = brace_match_end(&src, 0);
         assert_eq!(end, 4); // '}' 라인까지
+    }
+
+    #[test]
+    fn brace_match_handles_braces_in_strings_and_chars() {
+        // 문자열/문자 리터럴 속 중괄호를 깊이 계산에서 제외해야 정확하다.
+        let src = vec![
+            "int f(void)",
+            "{",
+            "    char *s = \"}\";",   // 문자열 속 '}' — 무시되어야
+            "    char c = '{';",        // 문자 리터럴 속 '{'
+            "    return 0;",
+            "}",
+            "int g;",
+        ];
+        let end = brace_match_end(&src, 0);
+        assert_eq!(end, 6, "함수의 진짜 닫는 중괄호(6번째 줄)를 찾아야 함");
     }
 
     // ctags 가 있는 환경에서만 도는 통합 테스트.

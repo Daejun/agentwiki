@@ -92,6 +92,20 @@ pub struct Note {
 }
 
 impl Note {
+    /// 마지막(최신) 엔트리 헤더의 타임스탬프를 반환한다(D11 정렬용).
+    /// 엔트리 헤더 형식 `<RFC3339> · ...`의 첫 토큰. 없으면 None.
+    pub fn latest_timestamp(&self) -> Option<String> {
+        self.entries.iter().rev().find_map(|e| {
+            let tok = e.header.split_whitespace().next().unwrap_or("");
+            if looks_like_entry_header(&e.header) || (tok.len() >= 11 && tok.as_bytes()[10] == b'T')
+            {
+                Some(tok.to_string())
+            } else {
+                None
+            }
+        })
+    }
+
     /// 모든 엔트리 본문을 합친 검색용 텍스트.
     pub fn body_text(&self) -> String {
         let mut s = String::new();
@@ -165,8 +179,11 @@ fn find_fence(s: &str) -> Option<(usize, usize)> {
     None
 }
 
-/// "## ..." 헤더로 구분되는 append-only 엔트리들을 파싱.
-/// 헤더가 하나도 없으면 본문 전체를 단일 엔트리로 본다.
+/// "## <timestamp> · ..." 헤더로 구분되는 append-only 엔트리들을 파싱.
+///
+/// 본문에 일반 마크다운 헤딩(`## 주의사항`)이 들어와도 엔트리로 오분리하지 않도록,
+/// **RFC3339 타임스탬프로 시작하는 `## ` 라인만** 엔트리 헤더로 인식한다.
+/// 헤더가 하나도 없으면 본문 전체를 단일(무제목) 엔트리로 본다.
 fn parse_entries(body: &str) -> Vec<Entry> {
     let body = body.trim_start_matches('\n');
     let mut entries = Vec::new();
@@ -174,7 +191,10 @@ fn parse_entries(body: &str) -> Vec<Entry> {
 
     for line in body.split_inclusive('\n') {
         let trimmed = line.trim_end_matches(['\r', '\n']);
-        if let Some(rest) = trimmed.strip_prefix("## ") {
+        let entry_header = trimmed
+            .strip_prefix("## ")
+            .filter(|rest| looks_like_entry_header(rest));
+        if let Some(rest) = entry_header {
             if let Some(e) = cur.take() {
                 entries.push(e);
             }
@@ -199,6 +219,22 @@ fn parse_entries(body: &str) -> Vec<Entry> {
         e.body = e.body.trim_end().to_string();
     }
     entries
+}
+
+/// `## ` 다음 텍스트가 엔트리 헤더(타임스탬프로 시작)처럼 보이는지 판정한다.
+/// 엔트리 헤더 형식: `<RFC3339> · host=... · confidence=...`.
+/// 보수적으로 "YYYY-MM-DDT...로 시작하는가"만 검사해 일반 헤딩과 구별한다.
+fn looks_like_entry_header(rest: &str) -> bool {
+    let token = rest.split_whitespace().next().unwrap_or("");
+    // 최소 "YYYY-MM-DDT" 길이(11)와 날짜 구분자 위치를 확인.
+    let b = token.as_bytes();
+    b.len() >= 11
+        && b[0..4].iter().all(|c| c.is_ascii_digit())
+        && b[4] == b'-'
+        && b[5..7].iter().all(|c| c.is_ascii_digit())
+        && b[7] == b'-'
+        && b[8..10].iter().all(|c| c.is_ascii_digit())
+        && b[10] == b'T'
 }
 
 #[cfg(test)]
@@ -251,5 +287,59 @@ do_mmap 진입 시 호출자가 mmap_write_lock 보유 가정.
     fn missing_fence_errors() {
         let bad = "---\nid: x\ntitle: y\n";
         assert!(Note::parse(bad, None).is_err());
+    }
+
+    #[test]
+    fn markdown_heading_in_body_is_not_split_as_entry() {
+        // 본문에 일반 ## 헤딩이 있어도 엔트리로 오분리되면 안 된다.
+        let md = "---\nid: mm-x\ntitle: t\nsubsystem: mm\n---\n\
+                  ## 2026-05-31T00:00:00Z · host=h · confidence=high\n\
+                  본문 시작\n\n## 주의사항\n이것은 헤딩이지 엔트리가 아님\n";
+        let n = Note::parse(md, None).unwrap();
+        assert_eq!(n.entries.len(), 1, "타임스탬프 엔트리 1개만 인식해야 함");
+        assert!(n.entries[0].body.contains("## 주의사항"));
+        assert!(n.entries[0].body.contains("헤딩이지 엔트리가 아님"));
+    }
+
+    #[test]
+    fn entry_with_markdown_heading_roundtrips_without_promotion() {
+        let md = "---\nid: mm-x\ntitle: t\nsubsystem: mm\n---\n\
+                  ## 2026-05-31T00:00:00Z · host=h · confidence=high\n\
+                  본문\n\n## 섹션\n내용\n";
+        let n1 = Note::parse(md, None).unwrap();
+        let out = n1.to_markdown().unwrap();
+        let n2 = Note::parse(&out, None).unwrap();
+        assert_eq!(n2.entries.len(), 1, "roundtrip 후에도 엔트리 1개 유지");
+        assert!(n2.entries[0].body.contains("## 섹션"));
+    }
+
+    #[test]
+    fn crlf_line_endings_parse() {
+        let md = "---\r\nid: mm-x\r\ntitle: t\r\nsubsystem: mm\r\n---\r\n\
+                  ## 2026-05-31T00:00:00Z · host=h · confidence=high\r\n\
+                  본문 라인\r\n";
+        let n = Note::parse(md, None).unwrap();
+        assert_eq!(n.front.id, "mm-x");
+        assert_eq!(n.entries.len(), 1);
+        assert!(n.entries[0].body.contains("본문 라인"));
+    }
+
+    #[test]
+    fn looks_like_entry_header_discriminates() {
+        assert!(looks_like_entry_header("2026-05-31T23:00:00Z · host=h"));
+        assert!(!looks_like_entry_header("주의사항"));
+        assert!(!looks_like_entry_header("Introduction"));
+        assert!(!looks_like_entry_header("2026 계획")); // 날짜 형식 아님
+    }
+
+    #[test]
+    fn note_with_no_entries_handled() {
+        let md = "---\nid: mm-x\ntitle: t\nsubsystem: mm\n---\n";
+        let n = Note::parse(md, None).unwrap();
+        assert_eq!(n.entries.len(), 0);
+        assert_eq!(n.body_text().trim(), "");
+        // 빈 노트도 roundtrip 가능해야.
+        let out = n.to_markdown().unwrap();
+        assert!(Note::parse(&out, None).is_ok());
     }
 }

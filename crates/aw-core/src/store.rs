@@ -136,14 +136,17 @@ impl Store {
     }
 
     /// 새 노트 ID 생성: `<subsystem>-<짧은해시>` (D21).
-    /// 해시는 제목+본문+서브시스템에서 파생(같은 입력=같은 id, 멀티머신 충돌 회피).
-    pub fn make_id(subsystem: &str, title: &str, body: &str) -> String {
+    ///
+    /// 해시는 **서브시스템 + 제목(주제 정체성)에서만** 파생한다. 본문은 제외한다 —
+    /// 같은 주제(같은 제목)에 다른 사실을 기록하면 같은 노트로 모여 append-only
+    /// 로그(D13)에 누적되도록 하기 위함이다. 본문을 넣으면 사실마다 노트가 분산된다.
+    /// 제목은 대소문자·공백을 정규화해 사소한 차이로 갈라지지 않게 한다.
+    pub fn make_id(subsystem: &str, title: &str, _body: &str) -> String {
+        let norm_title = title.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
         let mut h = Sha256::new();
         h.update(subsystem.as_bytes());
         h.update(b"\0");
-        h.update(title.as_bytes());
-        h.update(b"\0");
-        h.update(body.as_bytes());
+        h.update(norm_title.as_bytes());
         let digest = h.finalize();
         let hex: String = digest.iter().take(3).map(|b| format!("{b:02x}")).collect();
         format!("{subsystem}-{hex}")
@@ -452,6 +455,71 @@ mod tests {
         let hits = store.search("mmap_write_lock", None, 5).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, p.id);
+    }
+
+    #[test]
+    fn same_topic_different_body_appends_not_forks() {
+        // 같은 제목(주제)에 다른 사실을 기록하면 같은 노트에 append 되어야 한다.
+        let root = tmpdir();
+        let store = Store::open_in_memory(&root).unwrap();
+        let p1 = store
+            .propose("mm", "do_mmap 규약", "첫번째 사실", NoteType::Gotcha, vec![], "high", None)
+            .unwrap();
+        store.commit(&p1).unwrap();
+        let p2 = store
+            .propose("mm", "do_mmap 규약", "두번째 다른 사실", NoteType::Gotcha, vec![], "high", None)
+            .unwrap();
+        assert_eq!(p1.id, p2.id, "같은 제목은 같은 id");
+        assert!(p2.is_append, "두번째는 append 여야 함");
+        store.commit(&p2).unwrap();
+        let note = store.get(&p1.id).unwrap();
+        assert_eq!(note.entries.len(), 2);
+
+        // 디스크에 노트 파일이 하나만 있어야(분산 방지).
+        let count = WalkDir::new(root.join("notes"))
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
+            .count();
+        assert_eq!(count, 1, "같은 주제는 파일 1개로 모여야 함");
+    }
+
+    #[test]
+    fn digest_orders_by_latest_entry_and_survives_reindex() {
+        let root = tmpdir();
+        let store = Store::open_in_memory(&root).unwrap();
+        // 명시적 타임스탬프 헤더로 시간 순서를 통제한 노트 3개를 직접 쓴다.
+        let mk = |id: &str, ts: &str| {
+            format!(
+                "---\nid: {id}\ntitle: {id}\nsubsystem: mm\nconfidence: low\n---\n## {ts} · host=h · confidence=low\n본문\n"
+            )
+        };
+        let dir = root.join("notes").join("mm");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.md"), mk("a", "2026-01-01T00:00:00Z")).unwrap();
+        std::fs::write(dir.join("b.md"), mk("b", "2026-03-01T00:00:00Z")).unwrap();
+        std::fs::write(dir.join("c.md"), mk("c", "2026-02-01T00:00:00Z")).unwrap();
+        store.reindex().unwrap();
+
+        let d1 = store.digest(10).unwrap();
+        let order1: Vec<String> = d1.notes.iter().map(|n| n.id.clone()).collect();
+        // 최신(2026-03=b) → 2026-02=c → 2026-01=a 순.
+        assert_eq!(order1, vec!["b", "c", "a"], "최신 엔트리 순으로 정렬되어야");
+
+        // reindex 를 다시 해도 순서가 유지되어야(updated 가 엔트리 ts 기반).
+        store.reindex().unwrap();
+        let d2 = store.digest(10).unwrap();
+        let order2: Vec<String> = d2.notes.iter().map(|n| n.id.clone()).collect();
+        assert_eq!(order1, order2, "reindex 후에도 순서 보존");
+    }
+
+    #[test]
+    fn title_normalization_unifies_id() {
+        // 공백/대소문자 차이는 같은 id 로 정규화.
+        assert_eq!(
+            Store::make_id("mm", "Do_Mmap  규약", ""),
+            Store::make_id("mm", "do_mmap 규약", "")
+        );
     }
 
     #[test]
