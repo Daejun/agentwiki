@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::code::{CodeIndex, SymbolDef};
-use crate::embed::{Embedder, NoopEmbedder};
+use crate::embed::{Embedder, HashEmbedder};
 use crate::error::{AwError, Result};
 use crate::index::{Hit, Index};
 use crate::note::{Entry, Frontmatter, Note, NoteType};
@@ -44,7 +44,7 @@ impl Store {
         Ok(Store {
             root: root.as_ref().to_path_buf(),
             index,
-            embedder: Box::new(NoopEmbedder),
+            embedder: Box::new(HashEmbedder::default()),
         })
     }
 
@@ -53,7 +53,7 @@ impl Store {
         Ok(Store {
             root: root.as_ref().to_path_buf(),
             index: Index::open_in_memory()?,
-            embedder: Box::new(NoopEmbedder),
+            embedder: Box::new(HashEmbedder::default()),
         })
     }
 
@@ -315,6 +315,38 @@ impl Store {
         })
     }
 
+    /// append 로그 compact (D13): 한 노트 안에서 본문이 동일한 중복 엔트리를
+    /// 제거하고, 빈 엔트리를 정리한다. 가장 오래된 출처를 보존한다. 디스크에
+    /// 다시 쓰고 인덱스를 갱신한다. 반환: 제거된 엔트리 총수.
+    pub fn compact(&self) -> Result<usize> {
+        let mut removed_total = 0;
+        for mut note in self.all_notes()? {
+            let before = note.entries.len();
+            let mut seen: Vec<String> = Vec::new();
+            note.entries.retain(|e| {
+                let key = e.body.trim().to_string();
+                if key.is_empty() {
+                    return false;
+                }
+                if seen.contains(&key) {
+                    false // 동일 본문 중복 제거(가장 오래된 것만 유지)
+                } else {
+                    seen.push(key);
+                    true
+                }
+            });
+            let removed = before - note.entries.len();
+            if removed > 0 {
+                if let Some(path) = &note.path {
+                    std::fs::write(path, note.to_markdown()?)?;
+                    self.index.upsert_note(&note, self.embedder.as_ref())?;
+                }
+                removed_total += removed;
+            }
+        }
+        Ok(removed_total)
+    }
+
     /// 모든 노트의 닻을 코드 인덱스와 대조해 stale 을 보고한다(D14).
     pub fn check_stale(&self) -> Result<Vec<StaleReport>> {
         let mut reports = Vec::new();
@@ -467,6 +499,33 @@ mod tests {
         assert_eq!(n, 1);
         let hits = store2.search("softirq", None, 5).unwrap();
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn compact_removes_duplicate_entries() {
+        let root = tmpdir();
+        let store = Store::open_in_memory(&root).unwrap();
+        let p1 = store
+            .propose("mm", "t", "동일한 사실", NoteType::Gotcha, vec![], "high", None)
+            .unwrap();
+        store.commit(&p1).unwrap();
+        // 같은 본문을 append → 중복.
+        let p2 = store
+            .propose("mm", "t", "동일한 사실", NoteType::Gotcha, vec![], "med", Some(&p1.id))
+            .unwrap();
+        store.commit(&p2).unwrap();
+        // 다른 본문 append → 유지.
+        let p3 = store
+            .propose("mm", "t", "새로운 사실", NoteType::Gotcha, vec![], "med", Some(&p1.id))
+            .unwrap();
+        store.commit(&p3).unwrap();
+        assert_eq!(store.get(&p1.id).unwrap().entries.len(), 3);
+
+        let removed = store.compact().unwrap();
+        assert_eq!(removed, 1, "중복 1개 제거");
+        let note = store.get(&p1.id).unwrap();
+        assert_eq!(note.entries.len(), 2);
+        assert!(note.body_text().contains("새로운 사실"));
     }
 
     #[test]

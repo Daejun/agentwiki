@@ -108,6 +108,15 @@ $AW --root ./data recall do_mmap                # 코드+노트 통합 회수 + 
 
 - **M1 ✅**: 위키/메모리 코어 — 노트·인덱스·검색·KV·반자동 캡처·다이제스트.
 - **M2 ✅**: ctags/cscope 코드 인덱스 + `code`(where/show/xref) + `recall` + stale.
-- **M3 (진행)**: CI/릴리스 워크플로(musl 바이너리 + cargo install), SessionStart 훅.
+- **M3 🟡**: CI/릴리스 워크플로(musl 바이너리 + cargo install), SessionStart 훅 완료.
   clangd 승격은 향후.
-- **M4**: fastembed-rs 임베딩 활성화, append 로그 compact, 멀티 버전 키잉.
+- **M4 🟡**: 로컬 임베딩 하이브리드 검색 활성화(`HashEmbedder`, 의존성 0) +
+  append 로그 compact 완료. fastembed 고품질 모델(D18)·멀티 버전 키잉은 향후.
+
+### 검색 동작 (M4)
+
+기본 검색은 **FTS5(trigram) + 로컬 임베딩 벡터를 RRF로 융합**합니다. 임베딩은
+의존성 0의 결정론적 문자-트라이그램 해시(`HashEmbedder`)로, 네트워크 없이 동작하며
+어휘적 유사도를 포착합니다. 최소 코사인 임계값으로 무관한 노트를 걸러 정밀도를
+유지합니다. 고품질이 필요하면 `aw-core`의 `embeddings` feature로 fastembed 모델을
+연결합니다(D18).

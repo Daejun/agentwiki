@@ -256,11 +256,17 @@ impl Index {
         let rows = stmt.query_map(params![subsystem], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
         })?;
+        // 최소 유사도 임계값: 무관한 노트가 벡터 경로로 끌려오는 것을 막는다.
+        // (정밀도 우선 — D5/D9의 "퍼지보다 정밀" 원칙)
+        const MIN_COSINE: f32 = 0.15;
         let mut scored: Vec<(String, f32)> = Vec::new();
         for row in rows {
             let (id, blob) = row?;
             let v = blob_to_f32(&blob);
-            scored.push((id, cosine(&qv, &v)));
+            let s = cosine(&qv, &v);
+            if s >= MIN_COSINE {
+                scored.push((id, s));
+            }
         }
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit);
@@ -510,6 +516,33 @@ mod tests {
         let hits = idx.search("규약", None, 5, &emb).unwrap();
         assert_eq!(hits.len(), 1, "2글자 한국어 질의가 폴백으로 매치되어야 함");
         assert_eq!(hits[0].id, "mm-1");
+    }
+
+    #[test]
+    fn hybrid_vector_path_active_but_filters_unrelated() {
+        use crate::embed::HashEmbedder;
+        let idx = Index::open_in_memory().unwrap();
+        let emb = HashEmbedder::default();
+        idx.upsert_note(
+            &sample("mm-1", "mm", "mmap 락 규약", "do_mmap 진입 시 mmap_write_lock 보유 필요"),
+            &emb,
+        )
+        .unwrap();
+        idx.upsert_note(
+            &sample("net-1", "net", "소켓 버퍼", "skb 할당은 softirq 컨텍스트"),
+            &emb,
+        )
+        .unwrap();
+        // 관련 질의는 mm 노트를 최상위로.
+        let hits = idx.search("mmap 락 보유", None, 5, &emb).unwrap();
+        assert!(!hits.is_empty());
+        assert_eq!(hits[0].id, "mm-1");
+        // 완전 무관 질의는 임계값에 걸려 결과가 없거나 mm 을 끌어오지 않아야.
+        let unrelated = idx.search("자바스크립트 프론트엔드 렌더링", None, 5, &emb).unwrap();
+        assert!(
+            unrelated.is_empty() || unrelated.iter().all(|h| h.score < 0.5),
+            "무관 질의가 강하게 매칭되면 안 됨: {unrelated:?}"
+        );
     }
 
     #[test]

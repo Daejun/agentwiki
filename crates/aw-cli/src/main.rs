@@ -143,6 +143,11 @@ fn main() -> anyhow::Result<()> {
                 println!("mention: {} [{}] {}", h.id, h.subsystem, h.title);
             }
         }
+        "compact" => {
+            let store = open(&root)?;
+            let removed = store.compact()?;
+            println!("compacted: removed {removed} duplicate/empty entries");
+        }
         "digest" => {
             let store = open(&root)?;
             store.reindex()?;

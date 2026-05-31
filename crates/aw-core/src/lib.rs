@@ -16,7 +16,7 @@ pub mod secrets;
 pub mod store;
 
 pub use code::{CodeIndex, SymbolDef};
-pub use embed::{Embedder, NoopEmbedder};
+pub use embed::{Embedder, HashEmbedder, NoopEmbedder};
 pub use error::{AwError, Result};
 pub use index::{Hit, Index};
 pub use note::{CodeRef, Entry, Frontmatter, Note, NoteType};

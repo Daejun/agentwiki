@@ -247,15 +247,22 @@ CREATE TABLE links (src, dst, rel);                                   -- 노트�
 | M1 위키/메모리 | ✅ 완료 | 노트·FTS5(trigram)+LIKE 폴백·KV 3스코프·반자동 캡처·다이제스트·비밀 스캔 |
 | M2 코드 인덱스 | ✅ 완료 | ctags(where/show 슬라이싱)·cscope(xref)·recall·심볼 닻 stale 검증(D14) |
 | M3 패키징/통합 | 🟡 부분 | CI/release 워크플로·SessionStart 훅 완료. clangd 승격은 미구현 |
-| M4 확장 | ⬜ 예정 | fastembed 실제 추론(현재 트레이트+자리만), append compact, 멀티버전 |
+| M4 확장 | 🟡 부분 | 로컬 임베딩 하이브리드 활성화·append compact 완료. fastembed 고품질 모델·멀티버전은 향후 |
 
-구현된 크레이트: `aw-core`(라이브러리, 20 단위테스트), `aw-mcp`(MCP 서버:
+구현된 크레이트: `aw-core`(라이브러리, 25 단위테스트), `aw-mcp`(MCP 서버:
 wiki/code/recall/kv/admin), `aw-cli`(`aw` 디버깅 CLI). 검증 스크립트:
-`scripts/smoke.sh`(자동), `scripts/demo.sh`(시연).
+`scripts/smoke.sh`(자동, 38체크), `scripts/demo.sh`(시연).
+
+**M4 구현 내용:**
+- **하이브리드 벡터 검색 활성화**(D9): 의존성 0의 결정론적 로컬 임베더
+  (`HashEmbedder` — 문자 트라이그램 feature hashing). FTS5와 RRF 융합되며
+  최소 코사인 임계값(0.15)으로 무관 노트를 거른다. 한국어 문자 n-gram에 적합.
+- **append 로그 compact**(D13): 동일 본문 중복/빈 엔트리 제거, 가장 오래된 출처 보존.
 
 **의도적으로 미완(정직 고지):**
-- 임베딩(D9/D18)은 `embeddings` feature 뒤 트레이트·자리만 — 모델 다운로드가
-  잠긴 환경 빌드를 막으므로 M4로 미룸. 현재 검색은 FTS5+LIKE 단독.
+- 고품질 임베딩(D18: fastembed 다국어 모델)은 `embeddings` feature 뒤 트레이트로
+  유지 — 네이티브 ONNX 런타임 다운로드가 ephemeral 환경에서 불안정하므로 기본은
+  `HashEmbedder`. 학습 임베딩만큼 의미가 풍부하진 않으나 하이브리드 경로는 실동작.
 - clangd 승격(D7 정밀 경로)·멀티 커널 버전 키잉(D16)은 향후.
 
 ## 8. 미해결/추후 결정 (열어둠)

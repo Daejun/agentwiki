@@ -200,6 +200,39 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+head "hybrid search & compaction (M4)"
+HWORK="$(mktemp -d)"
+trap 'rm -rf "$WORK" "$MWORK" "$CSRC" "$CDATA" "$HWORK"' EXIT
+# 노트 생성 출력에서 id를 직접 캡처(검색 의존 제거).
+cre=$("$AW" --root "$HWORK" note mm "mmap 락 규약" "do_mmap 진입 시 mmap_write_lock 보유 필요" gotcha high 2>/dev/null)
+ID=$(printf '%s' "$cre" | awk '/created/ {print $2}')
+"$AW" --root "$HWORK" note net "소켓 버퍼" "skb 할당은 softirq 컨텍스트" concept med >/dev/null 2>&1
+
+# 관련 질의는 mm 노트를 찾는다(FTS + 벡터 융합).
+out=$("$AW" --root "$HWORK" search "mmap 보유" 2>/dev/null)
+check "hybrid search finds related note" "mmap 락 규약" "$out"
+
+# 완전 무관 질의는 임계값에 걸려 끌려오지 않는다(정밀도).
+out=$("$AW" --root "$HWORK" search "자바스크립트 프론트엔드 렌더링" 2>/dev/null)
+if [[ -z "$out" || "$out" != *"mmap"* ]]; then
+  ok "vector threshold filters unrelated query"
+else
+  bad "unrelated query should not match mm note"
+fi
+
+# compact: 동일 본문 append → 중복 → 제거(D13).
+"$AW" --root "$HWORK" note mm "mmap 락 규약" "do_mmap 진입 시 mmap_write_lock 보유 필요" gotcha high "$ID" >/dev/null 2>&1
+before=$("$AW" --root "$HWORK" get "$ID" 2>/dev/null | grep -c '^## ')
+out=$("$AW" --root "$HWORK" compact 2>/dev/null)
+after=$("$AW" --root "$HWORK" get "$ID" 2>/dev/null | grep -c '^## ')
+check "compact removes duplicate entry" "removed 1" "$out"
+if [[ "$before" == "2" && "$after" == "1" ]]; then
+  ok "compact: 2 entries -> 1 (dedup)"
+else
+  bad "compact entry count (before=$before after=$after)"
+fi
+
+# ---------------------------------------------------------------------------
 head "result"
 printf '%s%d passed%s, %s%d failed%s\n' "$GREEN" "$PASS" "$RESET" \
   "$([[ $FAIL -gt 0 ]] && echo "$RED" || echo "$GREEN")" "$FAIL" "$RESET"

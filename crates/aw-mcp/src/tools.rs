@@ -308,6 +308,10 @@ impl Server {
                 }
                 Ok(s)
             }
+            "compact" => {
+                let removed = store.compact()?;
+                Ok(format!("compacted: removed {removed} duplicate/empty entries"))
+            }
             "scan-secrets" => {
                 let text = str_arg(a, "text").unwrap_or_default();
                 let findings = aw_core::secrets::scan(&text);
@@ -427,7 +431,7 @@ fn tool_specs() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "op": {"type": "string", "enum": ["reindex", "digest", "stale", "scan-secrets"]},
+                    "op": {"type": "string", "enum": ["reindex", "digest", "stale", "compact", "scan-secrets"]},
                     "limit": {"type": "integer"},
                     "text": {"type": "string"}
                 },
