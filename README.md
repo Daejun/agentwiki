@@ -7,6 +7,9 @@
 - 설계 배경·기존 프로젝트 조사: [`docs/design.md`](docs/design.md)
 - 확정 설계 결정 24개(ADR): [`docs/decisions.md`](docs/decisions.md)
 
+> **새 세션/클론으로 이어서 작업한다면 [`docs/STATUS.md`](docs/STATUS.md)부터 읽으세요.**
+> 진행 상황·환경 설정·남은 작업·작업 관례가 거기 있습니다.
+
 ## 핵심 아이디어
 
 - **마크다운이 진실의 원천, SQLite는 파생 인덱스** (D4). 마크다운만 git으로
